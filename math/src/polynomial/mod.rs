@@ -2,7 +2,10 @@ use crate::field::element::FieldElement;
 use crate::field::traits::IsField;
 use std::ops;
 
-pub mod multilinear;
+// pub mod multivariate;
+mod multilinear_poly;
+mod multilinear_term;
+mod multivariate_term;
 pub mod term;
 
 /// Represents the polynomial c_0 + c_1 * X + c_2 * X^2 + ... + c_n * X^n
