@@ -1,31 +1,36 @@
-use core::slice::SlicePattern;
-use std::ops::AddAssign;
+use serde::Serialize;
+use std::ops::{AddAssign, Mul};
 
 use lambdaworks_math::field::element::FieldElement;
 use lambdaworks_math::field::traits::{IsField, IsPrimeField};
 use lambdaworks_math::polynomial::multilinear_poly::MultilinearPolynomial;
+use lambdaworks_math::polynomial::multilinear_term::MultiLinearMonomial;
 use lambdaworks_math::traits::ByteConversion;
+// use lambdaworks_math::traits::ByteConversion;
 
 use crate::fiat_shamir::default_transcript::DefaultTranscript;
 use crate::fiat_shamir::transcript::Transcript;
 
 /// Sumcheck Fiat-Shamir proof
-pub struct Proof<F: IsPrimeField>
+pub struct SumcheckProof<F: IsPrimeField>
 where
     <F as IsField>::BaseType: Send + Sync,
 {
-    polys: Vec<MultilinearPolynomial<F>>,
-    r: Vec<FieldElement<F>>,
+    pub poly: MultilinearPolynomial<F>,
+    pub sum: FieldElement<F>,
+    // TODO: this should be a univariate polynomial
+    pub uni_polys: Vec<MultilinearPolynomial<F>>,
 }
 
-impl<F: IsPrimeField> Proof<F>
+impl<F: IsPrimeField> SumcheckProof<F>
 where
     <F as IsField>::BaseType: Send + Sync,
 {
-    pub fn new() -> Proof<F> {
-        Proof {
-            polys: Vec::<MultilinearPolynomial<F>>::new(),
-            r: Vec::<FieldElement<F>>::new(),
+    pub fn new(poly: MultilinearPolynomial<F>, sum: FieldElement<F>) -> SumcheckProof<F> {
+        SumcheckProof {
+            poly,
+            sum,
+            uni_polys: Vec::new(),
         }
     }
 }
@@ -48,13 +53,13 @@ where
     /// Constructor for prover takes a multilinear polynomial
     pub fn new(poly: MultilinearPolynomial<F>) -> Prover<F> {
         Prover {
-            poly: poly,
+            poly,
             round: 0,      // current round of the protocol
             r: Vec::new(), // random challenges
         }
     }
 
-    /// Generates a valid sum of the polynomial
+    /// Sums the evaluations of the polynomial over the boolean hypercube
     pub fn generate_valid_sum(&self) -> FieldElement<F> {
         let mut acc = FieldElement::<F>::zero();
 
@@ -150,30 +155,47 @@ where
 
     /// Generates a single proof using Fiat-Shamir in
     /// the sumcheck protocol
-    pub fn prove(&mut self) -> Proof<F> {
+    pub fn prove(&mut self) -> SumcheckProof<F> {
         let mut transcript = DefaultTranscript::new();
 
         // add the claimed sum to the transcript
-        let sum = self.generate_valid_sum().to_bytes_be();
-        transcript.append(&sum);
+        let sum = self.generate_valid_sum();
+        transcript.append(&sum.to_bytes_be());
+        add_poly_to_transcript(&self.poly, &mut transcript);
 
-        let mut proof = Proof::<F>::new();
+        let mut proof = SumcheckProof::<F>::new(self.poly.clone(), sum);
+
         for round in 1..=self.poly.n_vars {
-            //create challenge from the transcript
+            let round_poly = self.send_poly();
+            add_poly_to_transcript(&round_poly, &mut transcript);
+            proof.uni_polys.push(round_poly);
+
+            // sample challenge from transcript
             let challenge = transcript.challenge();
             let r = FieldElement::<F>::from_bytes_be(&challenge).unwrap();
-            //add challenge to the proof
-            proof.r.push(r.clone());
-            //create polynomial from challenge
-            let _ = self.receive_challenge(r.clone(), round as u32);
-            let round_poly = self.send_poly();
-            //evaluate polynomial and add it to transcript
-            let value = round_poly.evaluate(vec![r; round_poly.n_vars].as_slice());
-            transcript.append(&value.to_bytes_be());
-            //add polynomial to proof
-            proof.polys.push(round_poly);
+
+            // add challenge to prover and advance round
+            self.receive_challenge(r, round as u32).unwrap();
         }
+
         proof
+    }
+}
+
+/// Add a multilinear polynomial to the transcript
+pub fn add_poly_to_transcript<F: IsPrimeField>(
+    poly: &MultilinearPolynomial<F>,
+    transcript: &mut DefaultTranscript,
+) where
+    <F as IsField>::BaseType: Send + Sync,
+    FieldElement<F>: ByteConversion,
+{
+    transcript.append(&poly.n_vars.to_be_bytes());
+    for term in &poly.terms {
+        transcript.append(&term.coeff.to_bytes_be());
+        for var in &term.vars {
+            transcript.append(&var.to_be_bytes());
+        }
     }
 }
 
