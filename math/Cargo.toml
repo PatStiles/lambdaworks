@@ -55,7 +55,7 @@ lambdaworks-serde-binary = ["dep:serde", "alloc"]
 lambdaworks-serde-string = ["dep:serde", "dep:serde_json", "alloc"]
 proptest = ["dep:proptest"]
 winter_compatibility = ["winter-math", "miden-core"]
-icicle = ["dep:icicle-cuda-runtime", "icicle-core", "icicle-bls12-377", "icicle-bls12-381", "icicle-bn254"]
+icicle = ["dep:icicle-cuda-runtime", "dep:icicle-core", "dep:icicle-bls12-377", "dep:icicle-bls12-381", "dep:icicle-bn254"]
 instruments = []
 
 # gpu
@@ -95,6 +95,11 @@ harness = false
 name = "criterion_msm"
 harness = false
 required-features = ["parallel"]
+
+[[bench]]
+name = "criterion_icicle"
+harness = false
+required-features = ["icicle"]
 
 [[bench]]
 name = "criterion_fft"
