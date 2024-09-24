@@ -181,7 +181,7 @@ pub trait IsStarkProver<A: AIR> {
         E: IsSubFieldOf<A::FieldExtension>,
         A::Field: IsSubFieldOf<E>,
     {
-        let tree = BatchedMerkleTree::<E>::build(vectors);
+        let tree = BatchedMerkleTree::<E>::build(vectors).unwrap();
         let commitment = tree.root;
         (tree, commitment)
     }

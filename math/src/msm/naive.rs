@@ -1,15 +1,17 @@
 use core::fmt::Display;
 
+use crate::errors::ByteConversionError;
 use crate::cyclic_group::IsGroup;
 use crate::unsigned_integer::traits::IsUnsignedInteger;
 #[cfg(feature = "icicle")]
-use icicle_core::error::IcicleError;
+use icicle_runtime::errors::eIcicleError;
 
 #[derive(Debug)]
 pub enum MSMError {
     LengthMismatch(usize, usize),
+    ConversionError(ByteConversionError),
     #[cfg(feature = "icicle")]
-    Icicle(IcicleError),
+    Icicle(eIcicleError),
 }
 
 impl Display for MSMError {
@@ -18,6 +20,7 @@ impl Display for MSMError {
             MSMError::LengthMismatch(cs, points) => write!(f, "`cs` and `points` must be of the same length to compute `msm`. Got: {cs} and {points}"),
             #[cfg(feature = "icicle")]
             MSMError::Icicle(e) => write!(f, "Icicle GPU backend failure. {:?}", e),
+            MSMError::ConversionError(e) => write!(f, "Icicle GPU backend failure. {:?}", e),
         }
     }
 }
