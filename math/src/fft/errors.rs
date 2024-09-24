@@ -9,7 +9,7 @@ use lambdaworks_gpu::metal::abstractions::errors::MetalError;
 use lambdaworks_gpu::cuda::abstractions::errors::CudaError;
 
 #[cfg(feature = "icicle")]
-use icicle_core::error::IcicleError;
+use icicle_runtime::errors::eIcicleError;
 
 #[derive(Debug)]
 pub enum FFTError {
@@ -21,7 +21,7 @@ pub enum FFTError {
     #[cfg(feature = "cuda")]
     CudaError(CudaError),
     #[cfg(feature = "icicle")]
-    IcicleError(IcicleError),
+    IcicleError(eIcicleError),
 }
 
 impl Display for FFTError {

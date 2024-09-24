@@ -2,7 +2,7 @@ use crate::{
     cyclic_group::IsGroup,
     field::{element::FieldElement, traits::IsField},
     unsigned_integer::element::UnsignedInteger,
-    gpu::icicle::GpuMSMPoint
+    gpu::icicle::IcicleMSM
 };
 
 use super::naive::MSMError;
@@ -27,15 +27,17 @@ pub fn msm<const NUM_LIMBS: usize, F: IsField<BaseType = UnsignedInteger<NUM_LIM
     points: &[G],
 ) -> Result<G, MSMError>
 where
-    G: IsGroup + GpuMSMPoint,
+    G: IsGroup + IcicleMSM,
     FieldElement<F>: ByteConversion,
 {
     if cs.len() != points.len() {
         return Err(MSMError::LengthMismatch(cs.len(), points.len()));
     }
 
+    //TODO: disable this while initially testing
     #[cfg(feature = "icicle")]
     {
+        /*
         if !G::curve_name().is_empty() {
             icicle_msm(cs, points)
         } else {
@@ -43,10 +45,10 @@ where
                 "Icicle msm failed for field {}. Program will fallback to CPU.",
                 core::any::type_name::<F>()
             );
+        */
             let window_size = optimum_window_size(cs.len());
             let cs = cs.iter().map(|cs| *cs.value()).collect::<Vec<_>>();
             Ok(msm_with(&cs, points, window_size))
-        }
     }
 
     #[cfg(not(feature = "icicle"))]

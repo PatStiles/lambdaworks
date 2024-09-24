@@ -7,8 +7,7 @@ use crate::{
         traits::{IsFFTField, RootsConfig},
     },
     polynomial::Polynomial,
-    traits::ByteConversion,
-    gpu::icicle::{IcicleFFT, GpuMSMPoint}
+    gpu::icicle::IcicleFFT
 };
 use alloc::{vec, vec::Vec};
 
@@ -16,14 +15,12 @@ use alloc::{vec, vec::Vec};
 use crate::fft::gpu::cuda::polynomial::{evaluate_fft_cuda, interpolate_fft_cuda};
 #[cfg(feature = "metal")]
 use crate::fft::gpu::metal::polynomial::{evaluate_fft_metal, interpolate_fft_metal};
-#[cfg(feature = "icicle")]
-use crate::gpu::icicle::{evaluate_fft_icicle, interpolate_fft_icicle};
+// #[cfg(feature = "icicle")]
+// use crate::gpu::icicle::{evaluate_fft_icicle, interpolate_fft_icicle};
 
 use super::cpu::{ops, roots_of_unity};
 
-impl<E: IsField + IsFFTField + IcicleFFT> Polynomial<FieldElement<E>>
-where
-    FieldElement<E>: ByteConversion,
+impl<E: IsField> Polynomial<FieldElement<E>>
 {
     /// Returns `N` evaluations of this polynomial using FFT over a domain in a subfield F of E (so the results
     /// are P(w^i), with w being a primitive root of unity).
@@ -34,8 +31,6 @@ where
         blowup_factor: usize,
         domain_size: Option<usize>,
     ) -> Result<Vec<FieldElement<E>>, FFTError>
-    where
-        FieldElement<E>: ByteConversion,
     {
         let domain_size = domain_size.unwrap_or(0);
         let len = core::cmp::max(poly.coeff_len(), domain_size).next_power_of_two() * blowup_factor;
@@ -61,6 +56,7 @@ where
             }
         }
 
+        /*
         #[cfg(feature = "icicle")]
         {
             if !F::field_name().is_empty() {
@@ -73,8 +69,10 @@ where
                 evaluate_fft_cpu::<F, E>(&coeffs)
             }
         }
+        */
 
-        #[cfg(all(not(feature = "metal"), not(feature = "icicle")))]
+        // TODO: add back in not(feature = "icicle")
+        #[cfg(all(not(feature = "metal")))]
         {
             evaluate_fft_cpu::<F, E>(&coeffs)
         }
@@ -90,8 +88,6 @@ where
         domain_size: Option<usize>,
         offset: &FieldElement<F>,
     ) -> Result<Vec<FieldElement<E>>, FFTError>
-    where
-        FieldElement<E>: ByteConversion,
     {
         let scaled = poly.scale(offset);
         Polynomial::evaluate_fft::<F>(&scaled, blowup_factor, domain_size)
@@ -116,6 +112,7 @@ where
             }
         }
 
+        /*
         #[cfg(feature = "icicle")]
         {
             if !F::field_name().is_empty() {
@@ -128,8 +125,10 @@ where
                 interpolate_fft_cpu::<F, E>(&fft_evals)
             }
         }
+        */
 
-        #[cfg(all(not(feature = "metal"), not(feature = "icicle")))]
+        //TODO: re-enable , not(feature = "icicle")
+        #[cfg(all(not(feature = "metal")))]
         {
             interpolate_fft_cpu::<F, E>(fft_evals)
         }
@@ -152,8 +151,7 @@ pub fn compose_fft<F>(
     poly_2: &Polynomial<FieldElement<F>>,
 ) -> Polynomial<FieldElement<F>>
 where
-    F: IsFFTField + IcicleFFT,
-    FieldElement<F>: ByteConversion,
+    F: IsFFTField,
 {
     let poly_2_evaluations = Polynomial::evaluate_fft::<F>(poly_2, 1, None).unwrap();
 
@@ -368,7 +366,7 @@ mod tests {
             let p = Polynomial::new(&[FE::new(0), FE::new(2)]);
             let q = Polynomial::new(&[FE::new(0), FE::new(0), FE::new(0), FE::new(1)]);
             assert_eq!(
-                compose_fft::<F, F>(&p, &q),
+                compose_fft::<F>(&p, &q),
                 Polynomial::new(&[FE::new(0), FE::new(0), FE::new(0), FE::new(2)])
             );
         }

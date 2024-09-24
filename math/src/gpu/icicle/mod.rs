@@ -6,9 +6,10 @@ use crate::{
                 bls12_377::curve::BLS12377Curve,
                 bls12_381::{
                     curve::BLS12381Curve, default_types::FrField,
-                    field_extension::BLS12381PrimeField, twist::BLS12381TwistCurve,
+                    field_extension::BLS12381PrimeField, 
                 },
                 bn_254::{curve::BN254Curve, field_extension::BN254PrimeField},
+                grumpkin::{curve::{GrumpkinCurve, GrumpkinPrimeField}},
             },
             point::ShortWeierstrassProjectivePoint,
         },
@@ -18,7 +19,7 @@ use crate::{
     fft::errors::FFTError,
     field::{
         element::FieldElement,
-        fields::fft_friendly::stark_252_prime_field::Stark252PrimeField,
+        fields::fft_friendly::{stark_252_prime_field::Stark252PrimeField, babybear::Babybear31PrimeField},
         traits::{IsFFTField, IsField, IsSubFieldOf},
     },
     msm::naive::MSMError,
@@ -30,34 +31,36 @@ use icicle_bls12_381::curve::{
     CurveCfg as IcicleBLS12381Curve, ScalarCfg as IcicleBLS12381ScalarCfg,
 };
 use icicle_bn254::curve::{CurveCfg as IcicleBN254Curve, ScalarCfg as IcicleBN254ScalarCfg};
+use icicle_grumpkin::curve::{CurveCfg as IcicleGrumpkinCurve, ScalarCfg as IcicleGrumpkinScalarCfg};
 use icicle_core::{
     curve::{Affine, Curve, Projective},
-    msm,
-    ntt::{NTTConfig, NTTDir, NTT},
+    msm::{msm, MSMConfig, MSM},
+    ntt::{ntt_inplace, NTTConfig, NTTDomain, NTTDir,},
     traits::FieldImpl,
 };
-use icicle_cuda_runtime::{memory::HostOrDeviceSlice, stream::CudaStream};
+use icicle_runtime::{memory::{HostOrDeviceSlice, DeviceVec, HostSlice}, stream::IcicleStream};
 
 use std::fmt::Debug;
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
-impl GpuMSMPoint for ShortWeierstrassProjectivePoint<BLS12381Curve> {
-    type LambdaCurve = BLS12381Curve;
-    type GpuCurve = IcicleBLS12381Curve;
+impl IcicleMSM for ShortWeierstrassProjectivePoint<BLS12381Curve> {
+    type Curve = IcicleBLS12381Curve;
 
     fn curve_name() -> &'static str {
         "BLS12381"
     }
 
-    fn to_icicle_affine(point: &Self) -> Affine<Self::GpuCurve> {
-        let s = Self::to_affine(point);
-        Affine::<Self::GpuCurve> {
+    fn to_icicle_affine(&self) -> Affine<Self::Curve> {
+        let s = self.to_affine();
+        Affine::<Self::Curve> {
             x: Self::to_icicle_field(s.x()),
             y: Self::to_icicle_field(s.y()),
         }
     }
 
     fn from_icicle_projective(
-        icicle: &Projective<Self::GpuCurve>,
+        icicle: &Projective<Self::Curve>,
     ) -> Result<Self, ByteConversionError> {
         Ok(Self::new([
             Self::from_icicle_field(&icicle.x).unwrap(),
@@ -67,51 +70,22 @@ impl GpuMSMPoint for ShortWeierstrassProjectivePoint<BLS12381Curve> {
     }
 }
 
-//NOTE THIS IS A PLACEHOLDER COMPILING ICICLE G2 TOOK TO LONG!
-impl GpuMSMPoint for ShortWeierstrassProjectivePoint<BLS12381TwistCurve> {
-    type LambdaCurve = BLS12381Curve;
-    type GpuCurve = IcicleBLS12381Curve;
-
-    fn curve_name() -> &'static str {
-        ""
-    }
-
-    fn to_icicle_affine(point: &Self) -> Affine<Self::GpuCurve> {
-        let s = Self::to_affine(point);
-        Affine::<Self::GpuCurve> {
-            x: Self::to_icicle_field(s.x()),
-            y: Self::to_icicle_field(s.y()),
-        }
-    }
-
-    fn from_icicle_projective(
-        icicle: &Projective<Self::GpuCurve>,
-    ) -> Result<Self, ByteConversionError> {
-        Ok(Self::new([
-            Self::from_icicle_field(&icicle.x).unwrap(),
-            Self::from_icicle_field(&icicle.y).unwrap(),
-            Self::from_icicle_field(&icicle.z).unwrap(),
-        ]))
-    }
-}
-
-impl GpuMSMPoint for ShortWeierstrassProjectivePoint<BLS12377Curve> {
-    type LambdaCurve = BLS12377Curve;
-    type GpuCurve = IcicleBLS12377Curve;
+impl IcicleMSM for ShortWeierstrassProjectivePoint<BLS12377Curve> {
+    type Curve = IcicleBLS12377Curve;
     fn curve_name() -> &'static str {
         "BLS12377"
     }
 
-    fn to_icicle_affine(point: &Self) -> Affine<Self::GpuCurve> {
-        let s = Self::to_affine(point);
-        Affine::<Self::GpuCurve> {
+    fn to_icicle_affine(&self) -> Affine<Self::Curve> {
+        let s = self.to_affine();
+        Affine::<Self::Curve> {
             x: Self::to_icicle_field(s.x()),
             y: Self::to_icicle_field(s.y()),
         }
     }
 
     fn from_icicle_projective(
-        icicle: &Projective<Self::GpuCurve>,
+        icicle: &Projective<Self::Curve>,
     ) -> Result<Self, ByteConversionError> {
         Ok(Self::new([
             Self::from_icicle_field(&icicle.x).unwrap(),
@@ -121,23 +95,22 @@ impl GpuMSMPoint for ShortWeierstrassProjectivePoint<BLS12377Curve> {
     }
 }
 
-impl GpuMSMPoint for ShortWeierstrassProjectivePoint<BN254Curve> {
-    type LambdaCurve = BN254Curve;
-    type GpuCurve = IcicleBN254Curve;
+impl IcicleMSM for ShortWeierstrassProjectivePoint<BN254Curve> {
+    type Curve = IcicleBN254Curve;
     fn curve_name() -> &'static str {
         "BN254"
     }
 
-    fn to_icicle_affine(point: &Self) -> Affine<Self::GpuCurve> {
-        let s = Self::to_affine(point);
-        Affine::<Self::GpuCurve> {
+    fn to_icicle_affine(&self) -> Affine<Self::Curve> {
+        let s = self.to_affine();
+        Affine::<Self::Curve> {
             x: Self::to_icicle_field(s.x()),
             y: Self::to_icicle_field(s.y()),
         }
     }
 
     fn from_icicle_projective(
-        icicle: &Projective<Self::GpuCurve>,
+        icicle: &Projective<Self::Curve>,
     ) -> Result<Self, ByteConversionError> {
         Ok(Self::new([
             Self::from_icicle_field(&icicle.x).unwrap(),
@@ -147,9 +120,8 @@ impl GpuMSMPoint for ShortWeierstrassProjectivePoint<BN254Curve> {
     }
 }
 
-pub trait GpuMSMPoint: IsGroup {
-    type LambdaCurve: IsEllipticCurve + Clone + Debug;
-    type GpuCurve: Curve + msm::MSM<Self::GpuCurve>;
+pub trait IcicleMSM: IsGroup {
+    type Curve: Curve + MSM<Self::Curve>;
     //type FE: ByteConversion;
     /// Used for searching this field's implementation in other languages, e.g in MSL
     /// for executing parallel operations with the Metal API.
@@ -157,35 +129,37 @@ pub trait GpuMSMPoint: IsGroup {
         ""
     }
 
-    fn to_icicle_affine(point: &Self) -> Affine<Self::GpuCurve>;
+    fn to_icicle_affine(&self) -> Affine<Self::Curve>;
 
     fn from_icicle_projective(
-        icicle: &Projective<Self::GpuCurve>,
+        icicle: &Projective<Self::Curve>,
     ) -> Result<Self, ByteConversionError>;
 
-    fn to_icicle_field<FE: ByteConversion>(element: &FE) -> <Self::GpuCurve as Curve>::BaseField {
-        <Self::GpuCurve as Curve>::BaseField::from_bytes_le(&element.to_bytes_le())
+    fn to_icicle_field<FE: ByteConversion>(element: &FE) -> <Self::Curve as Curve>::BaseField {
+        <Self::Curve as Curve>::BaseField::from_bytes_le(&element.to_bytes_le())
     }
 
     fn to_icicle_scalar<FE: ByteConversion>(
         element: &FE,
-    ) -> <Self::GpuCurve as Curve>::ScalarField {
-        <Self::GpuCurve as Curve>::ScalarField::from_bytes_le(&element.to_bytes_le())
+    ) -> <Self::Curve as Curve>::ScalarField {
+        <Self::Curve as Curve>::ScalarField::from_bytes_le(&element.to_bytes_le())
     }
 
     fn from_icicle_field<FE: ByteConversion>(
-        icicle: &<Self::GpuCurve as Curve>::BaseField,
+        icicle: &<Self::Curve as Curve>::BaseField,
     ) -> Result<FE, ByteConversionError> {
         FE::from_bytes_le(&icicle.to_bytes_le())
     }
 }
 
+//TODO: consider removing these traits functions for explicitness or extrapolating into another SubTrait
+//TODO: Good news is the conversion and NTT interface is much simpler. 
+//  - Bad news is we still will need to map the extension fields.
 pub trait IcicleFFT: IsField
 where
     FieldElement<Self>: ByteConversion,
 {
-    type ScalarField: FieldImpl;
-    type Config: NTT<<Self as IcicleFFT>::ScalarField>;
+    type ScalarField: FieldImpl + NTTDomain<Self::ScalarField>;
 
     fn to_icicle_scalar(element: &FieldElement<Self>) -> Self::ScalarField {
         Self::ScalarField::from_bytes_le(&element.to_bytes_le())
@@ -198,67 +172,95 @@ where
     }
 }
 
+/*
 impl IcicleFFT for BLS12381PrimeField {
     type ScalarField = <IcicleBLS12381Curve as Curve>::ScalarField;
-    type Config = IcicleBLS12381ScalarCfg;
 }
 
+// For BLS12381 -> TODO Later
+/*
 impl IcicleFFT for FrField {
     type ScalarField = <IcicleBLS12381Curve as Curve>::ScalarField;
-    type Config = IcicleBLS12381ScalarCfg;
+}
+*/
+
+impl IcicleFFT for BN254PrimeField {
+    type ScalarField = <IcicleBN254Curve as Curve>::ScalarField;
 }
 
 // DUMMY IMPLEMENTATION OF STARK252 -> Fails when Icicle feature flag enabled
 impl IcicleFFT for Stark252PrimeField {
     type ScalarField = <IcicleBLS12381Curve as Curve>::ScalarField;
-    type Config = IcicleBLS12381ScalarCfg;
 }
+*/
 
-impl IcicleFFT for BN254PrimeField {
-    type ScalarField = <IcicleBN254Curve as Curve>::ScalarField;
-    type Config = IcicleBN254ScalarCfg;
-}
 
-pub fn icicle_msm<F: IsField, G: GpuMSMPoint>(
-    cs: &[FieldElement<F>],
-    points: &[G],
+//Note bases should be converted in parallel outside of this function.
+//TODO: add optional bit size
+pub fn icicle_msm<F: IsField, G: IcicleMSM>(
+    bases: &[Affine<<G as IcicleMSM>::Curve>],
+    scalars: &[FieldElement<F>],
 ) -> Result<G, MSMError>
 where
     FieldElement<F>: ByteConversion,
 {
-    let mut cfg = msm::MSMConfig::default();
-    let scalars = HostOrDeviceSlice::Host(
-        cs.iter()
+    let mut bases_slice = DeviceVec::<Affine<<G as IcicleMSM>::Curve>>::device_malloc(bases.len()).unwrap();
+    let mut scalars_slice = DeviceVec::<<<G as IcicleMSM>::Curve as Curve>::ScalarField>::device_malloc(scalars.len()).unwrap();
+    //We directly transmute the scalars this significantly speeds up the operations. See this test made by Icicle.
+    //let scalars = unsafe { &*(&scalars[..] as *const _ as *const [<<G as IcicleMSM>::Curve as Curve>::ScalarField]) };
+    let scalars: Vec<<<G as IcicleMSM>::Curve as Curve>::ScalarField> = 
+        scalars.iter()
             .map(|scalar| G::to_icicle_scalar(scalar))
-            .collect::<Vec<_>>(),
-    );
+            .collect::<Vec<_>>();
+    /*
     let points = HostOrDeviceSlice::Host(
         points
             .iter()
             .map(|point| G::to_icicle_affine(point))
             .collect::<Vec<_>>(),
     );
-    let mut msm_results = HostOrDeviceSlice::cuda_malloc(1).unwrap();
-    let stream = CudaStream::create().unwrap();
-    cfg.ctx.stream = &stream;
-    cfg.is_async = true;
-    msm::msm(&scalars, &points, &cfg, &mut msm_results).unwrap();
-    let mut msm_host_result = [Projective::<G::GpuCurve>::zero(); 1];
+    */
+
+    let mut stream = IcicleStream::create().unwrap();
+    bases_slice.copy_from_host_async(HostSlice::from_slice(&bases), &stream).unwrap();
+    scalars_slice.copy_from_host_async(HostSlice::from_slice(&scalars), &stream).unwrap();
+    let mut msm_result = DeviceVec::<Projective<<G as IcicleMSM>::Curve>>::device_malloc(1).unwrap();
+    let mut cfg = MSMConfig::default();
+    cfg.stream_handle = *stream;
+    cfg.are_scalars_montgomery_form = true;
+    cfg.is_async = false;
+
+    msm(&scalars_slice[..], &bases_slice[..], &cfg, &mut msm_result[..]).unwrap();
+    let mut msm_host_result = [Projective::<<G as IcicleMSM>::Curve>::zero(); 1];
+
+    msm_result.copy_to_host(HostSlice::from_mut_slice(&mut msm_host_result[..])).unwrap();
     stream.synchronize().unwrap();
-    msm_results.copy_to_host(&mut msm_host_result[..]).unwrap();
     stream.destroy().unwrap();
-    let res = G::from_icicle_projective(&msm_host_result[0]).unwrap();
-    Ok(res)
+    G::from_icicle_projective(&msm_host_result[0]).map_err(|e| MSMError::ConversionError(e))
 }
 
+//TODO: assume conversion to Icicle scalars was outside of function
+/*
+            let scalars = scalars
+                .par_iter()
+                .map(|x| <FE as IcicleFFT>::to_icicle_scalar(&x).unwrap())
+                .collect();
+
+*/
+/*
 pub fn evaluate_fft_icicle<F, E>(
-    coeffs: &Vec<FieldElement<E>>,
+    coeffs: &[FieldElement<E>],
 ) -> Result<Vec<FieldElement<E>>, FFTError>
 where
-    F: IsFFTField + IsSubFieldOf<E>,
+    F: IsFFTField + IsSubFieldOf<E> + IcicleFFT,
     FieldElement<E>: ByteConversion,
-    E: IsField + IcicleFFT,
+    E: IsField,
 {
+
+    let ntt_cfg: NTTConfig<<F as IcicleFFT>::ScalarField> = NTTConfig::default();
+    ntt_inplace(HostSlice::from_mut_slice(&mut scalars[..]), NTTDir::kForward, &ntt_cfg).unwrap();
+
+    /*
     let size = coeffs.len();
     let mut cfg = NTTConfig::default();
     let order = coeffs.len() as u64;
@@ -270,7 +272,7 @@ where
             .collect::<Vec<_>>(),
     );
     let mut ntt_results = HostOrDeviceSlice::cuda_malloc(size).unwrap();
-    let stream = CudaStream::create().unwrap();
+    let stream = IcicleStream::create().unwrap();
     cfg.ctx.stream = &stream;
     cfg.is_async = true;
     let root_of_unity = E::to_icicle_scalar(
@@ -288,6 +290,7 @@ where
         .map(|scalar| E::from_icicle_scalar(&scalar).unwrap())
         .collect::<Vec<_>>();
     Ok(res)
+    */
 }
 
 pub fn interpolate_fft_icicle<F, E>(
@@ -298,6 +301,7 @@ where
     FieldElement<E>: ByteConversion,
     E: IsField + IcicleFFT,
 {
+    /*
     let size = coeffs.len();
     let mut cfg = NTTConfig::default();
     let order = coeffs.len() as u64;
@@ -309,7 +313,7 @@ where
             .collect::<Vec<_>>(),
     );
     let mut ntt_results = HostOrDeviceSlice::cuda_malloc(size).unwrap();
-    let stream = CudaStream::create().unwrap();
+    let stream = IcicleStream::create().unwrap();
     cfg.ctx.stream = &stream;
     cfg.is_async = true;
     let root_of_unity = E::to_icicle_scalar(
@@ -326,8 +330,10 @@ where
         .iter()
         .map(|scalar| E::from_icicle_scalar(&scalar).unwrap())
         .collect::<Vec<_>>();
+    */
     Ok(Polynomial::new(&res))
 }
+*/
 
 #[cfg(test)]
 mod test {
@@ -340,14 +346,15 @@ mod test {
         field::element::FieldElement,
         msm::pippenger::msm,
     };
+    
 
     impl ShortWeierstrassProjectivePoint<BLS12381Curve> {
         fn from_icicle_affine(
-            icicle: &curve::G1Affine,
+            icicle: &Affine<IcicleBLS12381Curve>,
         ) -> Result<ShortWeierstrassProjectivePoint<BLS12381Curve>, ByteConversionError> {
             Ok(Self::new([
-                FieldElement::<BLS12381PrimeField>::from_icicle(&icicle.x).unwrap(),
-                FieldElement::<BLS12381PrimeField>::from_icicle(&icicle.y).unwrap(),
+                FieldElement::<BLS12381PrimeField>::from_bytes_le(&icicle.x.to_bytes_le()).unwrap(),
+                FieldElement::<BLS12381PrimeField>::from_bytes_le(&icicle.y.to_bytes_le()).unwrap(),
                 FieldElement::one(),
             ]))
         }
@@ -367,7 +374,7 @@ mod test {
     fn to_from_icicle() {
         // convert value of 5 to icicle and back again and that icicle 5 matches
         let point = point_times_5();
-        let icicle_point = point.to_icicle();
+        let icicle_point = point.to_icicle_affine();
         let res =
             ShortWeierstrassProjectivePoint::<BLS12381Curve>::from_icicle_affine(&icicle_point)
                 .unwrap();
@@ -375,10 +382,25 @@ mod test {
     }
 
     #[test]
+    fn to_from_icicle_scalar() {
+        // convert value of 5 to icicle and back again and that icicle 5 matches
+        let point = point_times_5();
+        let icicle_point = point.to_icicle_affine();
+        let res =
+            ShortWeierstrassProjectivePoint::<BLS12381Curve>::from_icicle_affine(&icicle_point)
+                .unwrap();
+    let scalars: Vec<<<G as IcicleMSM>::Curve as Curve>::ScalarField> = 
+        scalars.iter()
+            .map(|scalar| G::to_icicle_scalar(scalar))
+            .collect::<Vec<_>>();
+        assert_eq!(point, res)
+    }
+
+    #[test]
     fn to_from_icicle_generator() {
         // Convert generator and see that it matches
         let point = BLS12381Curve::generator();
-        let icicle_point = point.to_icicle();
+        let icicle_point = point.to_icicle_affine();
         let res =
             ShortWeierstrassProjectivePoint::<BLS12381Curve>::from_icicle_affine(&icicle_point)
                 .unwrap();
@@ -392,7 +414,8 @@ mod test {
         let lambda_scalars = vec![eight; LEN];
         let lambda_points = (0..LEN).map(|_| point_times_5()).collect::<Vec<_>>();
         let expected = msm(&lambda_scalars, &lambda_points).unwrap();
-        let res = bls12_381_g1_msm(&lambda_scalars, &lambda_points, None).unwrap();
+        let icicle_points = lambda_points.par_iter().map(|base| base.to_icicle_affine()).collect::<Vec<_>>();
+        let res: ShortWeierstrassProjectivePoint::<BLS12381Curve> = icicle_msm(&icicle_points, &lambda_scalars).unwrap();
         assert_eq!(res, expected);
     }
 }
