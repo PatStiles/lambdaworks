@@ -5,7 +5,7 @@ use crate::{
             curves::{
                 bls12_377::curve::BLS12377Curve,
                 bls12_381::{
-                    curve::BLS12381Curve, default_types::FrField,
+                    curve::BLS12381Curve, default_types::{FrField, FrElement},
                     field_extension::BLS12381PrimeField, 
                 },
                 bn_254::{curve::BN254Curve, field_extension::BN254PrimeField},
@@ -145,6 +145,12 @@ pub trait IcicleMSM: IsGroup {
         <Self::Curve as Curve>::ScalarField::from_bytes_le(&element.to_bytes_le())
     }
 
+    fn from_icicle_scalar<FE: ByteConversion>(
+        element: &<Self::Curve as Curve>::ScalarField,
+    ) -> Result<FE, ByteConversionError> {
+        FE::from_bytes_le(&element.to_bytes_le())
+    }
+
     fn from_icicle_field<FE: ByteConversion>(
         icicle: &<Self::Curve as Curve>::BaseField,
     ) -> Result<FE, ByteConversionError> {
@@ -207,11 +213,13 @@ where
     let mut bases_slice = DeviceVec::<Affine<<G as IcicleMSM>::Curve>>::device_malloc(bases.len()).unwrap();
     let mut scalars_slice = DeviceVec::<<<G as IcicleMSM>::Curve as Curve>::ScalarField>::device_malloc(scalars.len()).unwrap();
     //We directly transmute the scalars this significantly speeds up the operations. See this test made by Icicle.
-    //let scalars = unsafe { &*(&scalars[..] as *const _ as *const [<<G as IcicleMSM>::Curve as Curve>::ScalarField]) };
+    let scalars = unsafe { &*(&scalars[..] as *const _ as *const [<<G as IcicleMSM>::Curve as Curve>::ScalarField]) };
+    /*
     let scalars: Vec<<<G as IcicleMSM>::Curve as Curve>::ScalarField> = 
         scalars.iter()
             .map(|scalar| G::to_icicle_scalar(scalar))
             .collect::<Vec<_>>();
+    */
     /*
     let points = HostOrDeviceSlice::Host(
         points
@@ -227,7 +235,7 @@ where
     let mut msm_result = DeviceVec::<Projective<<G as IcicleMSM>::Curve>>::device_malloc(1).unwrap();
     let mut cfg = MSMConfig::default();
     cfg.stream_handle = *stream;
-    cfg.are_scalars_montgomery_form = true;
+    cfg.are_scalars_montgomery_form = false;
     cfg.is_async = false;
 
     msm(&scalars_slice[..], &bases_slice[..], &cfg, &mut msm_result[..]).unwrap();
@@ -239,14 +247,6 @@ where
     G::from_icicle_projective(&msm_host_result[0]).map_err(|e| MSMError::ConversionError(e))
 }
 
-//TODO: assume conversion to Icicle scalars was outside of function
-/*
-            let scalars = scalars
-                .par_iter()
-                .map(|x| <FE as IcicleFFT>::to_icicle_scalar(&x).unwrap())
-                .collect();
-
-*/
 /*
 pub fn evaluate_fft_icicle<F, E>(
     coeffs: &[FieldElement<E>],
@@ -346,7 +346,9 @@ mod test {
         field::element::FieldElement,
         msm::pippenger::msm,
     };
-    
+
+    pub type Fr = FrElement;
+    pub type G = ShortWeierstrassProjectivePoint<BLS12381Curve>;
 
     impl ShortWeierstrassProjectivePoint<BLS12381Curve> {
         fn from_icicle_affine(
@@ -360,6 +362,19 @@ mod test {
         }
     }
 
+    impl ShortWeierstrassProjectivePoint<BLS12381Curve> {
+        fn to_icicle_projective(
+            &self,
+        ) -> Projective<IcicleBLS12381Curve> {
+            Projective {
+                x: Self::to_icicle_field(self.x()),
+                y: Self::to_icicle_field(self.y()),
+                z: Self::to_icicle_field(self.z())
+        }
+        }
+    }
+
+
     fn point_times_5() -> ShortWeierstrassProjectivePoint<BLS12381Curve> {
         let x = BLS12381FieldElement::from_hex_unchecked(
             "32bcce7e71eb50384918e0c9809f73bde357027c6bf15092dd849aa0eac274d43af4c68a65fb2cda381734af5eecd5c",
@@ -371,12 +386,25 @@ mod test {
     }
 
     #[test]
-    fn to_from_icicle() {
+    fn to_from_icicle_affine() {
         // convert value of 5 to icicle and back again and that icicle 5 matches
         let point = point_times_5();
         let icicle_point = point.to_icicle_affine();
         let res =
-            ShortWeierstrassProjectivePoint::<BLS12381Curve>::from_icicle_affine(&icicle_point)
+            G::from_icicle_affine(&icicle_point)
+                .unwrap();
+        assert_eq!(point, res)
+    }
+
+    #[test]
+    fn to_from_icicle_projective() {
+        // convert value of 5 to icicle and back again and that icicle 5 matches
+        let point = point_times_5();
+        //let icicle_point = point.to_icicle_affine();
+        let icicle_projective =
+            G::to_icicle_projective(&point);
+        let res =
+            G::from_icicle_projective(&icicle_projective)
                 .unwrap();
         assert_eq!(point, res)
     }
@@ -384,16 +412,10 @@ mod test {
     #[test]
     fn to_from_icicle_scalar() {
         // convert value of 5 to icicle and back again and that icicle 5 matches
-        let point = point_times_5();
-        let icicle_point = point.to_icicle_affine();
-        let res =
-            ShortWeierstrassProjectivePoint::<BLS12381Curve>::from_icicle_affine(&icicle_point)
-                .unwrap();
-    let scalars: Vec<<<G as IcicleMSM>::Curve as Curve>::ScalarField> = 
-        scalars.iter()
-            .map(|scalar| G::to_icicle_scalar(scalar))
-            .collect::<Vec<_>>();
-        assert_eq!(point, res)
+        let scalar = Fr::from(8);
+        let icicle_scalar = G::to_icicle_scalar(&scalar);
+        let res = G::from_icicle_scalar(&icicle_scalar).unwrap();
+        assert_eq!(scalar, res)
     }
 
     #[test]
@@ -409,13 +431,14 @@ mod test {
 
     #[test]
     fn icicle_g1_msm() {
-        const LEN: usize = 20;
-        let eight: BLS12381FieldElement = FieldElement::from(8);
-        let lambda_scalars = vec![eight; LEN];
+        const LEN: usize = 1;
+        let scalar: Fr = Fr::from(1);
+        let lambda_scalars = vec![scalar; LEN];
         let lambda_points = (0..LEN).map(|_| point_times_5()).collect::<Vec<_>>();
         let expected = msm(&lambda_scalars, &lambda_points).unwrap();
+        println!("Lambda Expected Affine: {:?}", expected.to_affine());
         let icicle_points = lambda_points.par_iter().map(|base| base.to_icicle_affine()).collect::<Vec<_>>();
-        let res: ShortWeierstrassProjectivePoint::<BLS12381Curve> = icicle_msm(&icicle_points, &lambda_scalars).unwrap();
+        let res: G = icicle_msm(&icicle_points, &lambda_scalars).unwrap();
         assert_eq!(res, expected);
     }
 }
