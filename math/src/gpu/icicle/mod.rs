@@ -210,16 +210,19 @@ pub fn icicle_msm<F: IsField, G: IcicleMSM>(
 where
     FieldElement<F>: ByteConversion,
 {
-    let mut bases_slice = DeviceVec::<Affine<<G as IcicleMSM>::Curve>>::device_malloc(bases.len()).unwrap();
-    let mut scalars_slice = DeviceVec::<<<G as IcicleMSM>::Curve as Curve>::ScalarField>::device_malloc(scalars.len()).unwrap();
-    //We directly transmute the scalars this significantly speeds up the operations. See this test made by Icicle.
-    let scalars = unsafe { &*(&scalars[..] as *const _ as *const [<<G as IcicleMSM>::Curve as Curve>::ScalarField]) };
+    let mut stream = IcicleStream::create().unwrap();
+    //let mut scalars_slice = DeviceVec::<<<G as IcicleMSM>::Curve as Curve>::ScalarField>::device_malloc(scalars.len()).unwrap();
     /*
     let scalars: Vec<<<G as IcicleMSM>::Curve as Curve>::ScalarField> = 
         scalars.iter()
             .map(|scalar| G::to_icicle_scalar(scalar))
             .collect::<Vec<_>>();
     */
+    //We directly transmute the scalars this significantly speeds up the operations. See this test made by Icicle.
+    let scalars = unsafe { &*(&scalars[..] as *const _ as *const [<<G as IcicleMSM>::Curve as Curve>::ScalarField]) };
+    //scalars_slice.copy_from_host(HostSlice::from_slice(&scalars[..])).unwrap();
+    //let mut bases_slice = DeviceVec::<Affine<<G as IcicleMSM>::Curve>>::device_malloc(bases.len()).unwrap();
+    //bases_slice.copy_from_host(HostSlice::from_slice(&bases[..])).unwrap();
     /*
     let points = HostOrDeviceSlice::Host(
         points
@@ -229,17 +232,15 @@ where
     );
     */
 
-    let mut stream = IcicleStream::create().unwrap();
-    bases_slice.copy_from_host_async(HostSlice::from_slice(&bases), &stream).unwrap();
-    scalars_slice.copy_from_host_async(HostSlice::from_slice(&scalars), &stream).unwrap();
     let mut msm_result = DeviceVec::<Projective<<G as IcicleMSM>::Curve>>::device_malloc(1).unwrap();
     let mut cfg = MSMConfig::default();
     cfg.stream_handle = *stream;
-    cfg.are_scalars_montgomery_form = false;
     cfg.is_async = false;
+    cfg.are_scalars_montgomery_form = false;
+    cfg.are_bases_montgomery_form = false;
 
-    msm(&scalars_slice[..], &bases_slice[..], &cfg, &mut msm_result[..]).unwrap();
-    let mut msm_host_result = [Projective::<<G as IcicleMSM>::Curve>::zero(); 1];
+    let mut msm_host_result = vec![Projective::<<G as IcicleMSM>::Curve>::zero()];
+    msm(HostSlice::from_slice(&scalars[..]), HostSlice::from_slice(&bases[..]), &cfg, HostSlice::from_mut_slice(&mut msm_host_result)).unwrap();
 
     msm_result.copy_to_host(HostSlice::from_mut_slice(&mut msm_host_result[..])).unwrap();
     stream.synchronize().unwrap();
